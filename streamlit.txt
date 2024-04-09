@@ -1,0 +1,465 @@
+import streamlit as st
+import numpy as np
+from tensorflow.keras.models import load_model
+import pandas as pd
+import plotly.express as px
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+import datetime
+import time
+import tensorflow as tf
+from tensorflow.keras.layers import Input, Dense, Concatenate, Layer, BatchNormalization, Activation, LSTM, Attention, Reshape, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.initializers import GlorotUniform
+from keras.layers import Dense, Activation
+from keras.models import Sequential
+import plotly.offline as py
+import plotly.graph_objs as go
+import plotly.tools as tls
+from collections import Counter
+from tensorflow import keras
+from keras.models import load_model
+import copy
+
+
+#st_autorefresh(interval=5 * 60 * 1000, key="dataframerefresh")
+# Custom layer to share weights between similar type variables
+class SharedLayer(Layer):
+    def __init__(self, units, **kwargs):
+        self.units = units
+        super(SharedLayer, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        self.kernel = self.add_weight("kernel", shape=[input_shape[-1], self.units], initializer=GlorotUniform(seed=42))
+        super(SharedLayer, self).build(input_shape)
+
+    def call(self, inputs):
+        return tf.matmul(inputs, self.kernel)
+
+Group_1_blowers = ['5min_CF_D1','5min_CF_D2','5min_CF_D3','5min_CF_D4',
+                   '5min_CF_B9','5min_CF_B10','5min_CF_B11','5min_CF_B12']
+Group_2_blowers = ['5min_CF_D13','5min_CF_D14','5min_CF_D15','5min_CF_D16',
+                   '5min_CF_B5','5min_CF_B6','5min_CF_B7','5min_CF_B8']
+Group_3_blowers = ['5min_CF_D5','5min_CF_D6','5min_CF_D7','5min_CF_D8',
+                   '5min_CF_B13','5min_CF_B14','5min_CF_B15','5min_CF_B16']
+Group_4_blowers = ['5min_CF_D9','5min_CF_D10','5min_CF_D11','5min_CF_D12',
+                   '5min_CF_B1','5min_CF_B2','5min_CF_B3','5min_CF_B4']
+Group_5_blowers = ['5min_CF_C1','5min_CF_C2','5min_CF_C3','5min_CF_C4',
+                   '5min_CF_C5','5min_CF_C6','5min_CF_C7','5min_CF_C8',
+                   '5min_CF_C9','5min_CF_C10','5min_CF_C11','5min_CF_C12',
+                   '5min_CF_C13','5min_CF_C14','5min_CF_C15','5min_CF_C16']
+Group_6_blowers = ['5min_CF_A1','5min_CF_A2','5min_CF_A3','5min_CF_A4',
+                   '5min_CF_A5','5min_CF_A6','5min_CF_A7','5min_CF_A8',
+                   '5min_CF_A9','5min_CF_A10','5min_CF_A11','5min_CF_A12',
+                   '5min_CF_A13','5min_CF_A14','5min_CF_A15','5min_CF_A16']
+cols_to_scale = ['5min_CF_A1', '5min_CF_A2', '5min_CF_A3', '5min_CF_A4',
+                 '5min_CF_A5', '5min_CF_A6', '5min_CF_A7', '5min_CF_A8', '5min_CF_A9', '5min_CF_A10', '5min_CF_A11',
+                 '5min_CF_A12', '5min_CF_A13', '5min_CF_A14', '5min_CF_A15', '5min_CF_A16', '5min_CF_B1', '5min_CF_B2',
+                 '5min_CF_B3', '5min_CF_B4', '5min_CF_B5', '5min_CF_B6', '5min_CF_B7', '5min_CF_B8', '5min_CF_B9', '5min_CF_B10',
+                 '5min_CF_B11', '5min_CF_B12', '5min_CF_B13', '5min_CF_B14', '5min_CF_B15', '5min_CF_B16', '5min_CF_C1',
+                 '5min_CF_C2', '5min_CF_C3', '5min_CF_C4', '5min_CF_C5', '5min_CF_C6', '5min_CF_C7', '5min_CF_C8', '5min_CF_C9',
+                 '5min_CF_C10', '5min_CF_C11', '5min_CF_C12', '5min_CF_C13', '5min_CF_C14', '5min_CF_C15', '5min_CF_C16',
+                 '5min_CF_D1', '5min_CF_D2', '5min_CF_D3', '5min_CF_D4', '5min_CF_D5', '5min_CF_D6', '5min_CF_D7', '5min_CF_D8',
+                 '5min_CF_D9', '5min_CF_D10', '5min_CF_D11', '5min_CF_D12', '5min_CF_D13', '5min_CF_D14', '5min_CF_D15','5min_CF_D16',
+                 'ECON_OUTL_FEED_WATER_AVG_5min','FEEDWATER FLOW AT ECO INLET_5min',
+                 'LOAD/FUEL_5min', 'LOAD/AIR_5min', 'AIR FLOW_5min', 'COAL FLOW_5min',
+                 'Top_Mill_load_ratio_5min','Bottom_Mill_load_ratio_5min', 'Middle_Mill_load_ratio_5min',
+                 'Left_Side_Damper_5min', 'Right_Side_Damper_5min',
+                 'SSC_HYD_PRESSURE_Avg_1','LOAD_SSC_HYD_PRESSURE_Avg_1', 'WW_Gain_5min_shift']
+def load_data():
+    DF = pd.read_csv('DF_input_1_1.csv')
+    DF = DF.dropna()
+    DF = DF.tail(120)
+    DF_plot_1 = DF[['End Time','Load','WW_Gain']]
+    df_1 = DF_plot_1.copy()
+    current_ww_gain = DF['WW_Gain'].tail(5).mean()
+    Load = DF['Load'].tail(5).mean()
+    
+    soot_values_Brear_Dfront_actual = DF[Group_1_blowers].tail(1).sum(axis = 1).values[0]
+    soot_values_Bright_Dleft_actual = DF[Group_2_blowers].tail(1).sum(axis = 1).values[0]
+    soot_values_Bleft_Dright_actual = DF[Group_3_blowers].tail(1).sum(axis = 1).values[0]
+    soot_values_Bfront_Drear_actual = DF[Group_4_blowers].tail(1).sum(axis = 1).values[0]
+    soot_values_C_all_actual = DF[Group_5_blowers].tail(1).sum(axis = 1).values[0]
+    soot_values_A_all_actual = DF[Group_6_blowers].tail(1).sum(axis = 1).values[0]
+
+    soot_actual = [soot_values_Brear_Dfront_actual,soot_values_Bright_Dleft_actual,
+                  soot_values_Bleft_Dright_actual,soot_values_Bfront_Drear_actual,
+                  soot_values_C_all_actual, soot_values_A_all_actual]
+    
+    if Load > 600:
+        designed_ww_gain = 110
+    elif ((Load > 500) & (Load <= 600)):
+        designed_ww_gain = 85
+    else:
+        designed_ww_gain = 80
+        
+    dev_ww_gain = current_ww_gain - designed_ww_gain
+    
+    if dev_ww_gain > 5:
+        soot_values_Brear_Dfront_Upper = 1.6*8*100000*1.3
+        soot_values_Bright_Dleft_Upper = 1.9*8*100000*1.3
+        soot_values_Bleft_Dright_Upper = 1.6*8*100000*1.3
+        soot_values_Bfront_Drear_Upper = 1.9*8*100000*1.3
+        soot_values_C_all_Upper = 1.9*16*100000*1.3
+        soot_values_A_all_Upper = 4.5*16*100000*1.3
+        
+        soot_values_Brear_Dfront_Lower = 1.6*8*100000*1.3 - 10000
+        soot_values_Bright_Dleft_Lower = 1.9*8*100000*1.3 - 10000
+        soot_values_Bleft_Dright_Lower = 1.6*8*100000*1.3 - 10000
+        soot_values_Bfront_Drear_Lower = 1.9*8*100000*1.3 - 10000
+        soot_values_C_all_Lower = 1.9*16*100000*1.3 - 10000
+        soot_values_A_all_Lower = 4.5*16*100000*1.3 - 10000
+        
+    elif ((dev_ww_gain > 3) & (dev_ww_gain <=5)):
+        soot_values_Brear_Dfront_Upper = 1.6*8*100000*1.3
+        soot_values_Bright_Dleft_Upper = 1.9*8*100000*1.3
+        soot_values_Bleft_Dright_Upper = 1.6*8*100000*1.3
+        soot_values_Bfront_Drear_Upper = 1.9*8*100000*1.3
+        soot_values_C_all_Upper = 1.9*16*100000*1.3
+        soot_values_A_all_Upper = 4.5*16*100000*1.3
+        
+        soot_values_Brear_Dfront_Lower = 1.6*8*100000*1.2
+        soot_values_Bright_Dleft_Lower = 1.9*8*100000*1.2
+        soot_values_Bleft_Dright_Lower = 1.6*8*100000*1.2
+        soot_values_Bfront_Drear_Lower = 1.9*8*100000*1.2
+        soot_values_C_all_Lower = 1.9*16*100000*1.2
+        soot_values_A_all_Lower = 4.5*16*100000*1.2
+        
+    elif ((dev_ww_gain > 1) & (dev_ww_gain <=3)):
+        soot_values_Brear_Dfront_Upper = 1.6*8*100000*1.3
+        soot_values_Bright_Dleft_Upper = 1.9*8*100000*1.3
+        soot_values_Bleft_Dright_Upper = 1.6*8*100000*1.3
+        soot_values_Bfront_Drear_Upper = 1.9*8*100000*1.3
+        soot_values_C_all_Upper = 1.9*16*100000*1.3
+        soot_values_A_all_Upper = 4.5*16*100000*1.3
+        
+        soot_values_Brear_Dfront_Lower = 1.6*8*100000*1.1
+        soot_values_Bright_Dleft_Lower = 1.9*8*100000*1.1
+        soot_values_Bleft_Dright_Lower = 1.6*8*100000*1.1
+        soot_values_Bfront_Drear_Lower = 1.9*8*100000*1.1
+        soot_values_C_all_Lower = 1.9*16*100000*1.1
+        soot_values_A_all_Lower = 4.5*16*100000*1.1
+        
+    elif ((dev_ww_gain > -1) & (dev_ww_gain <= 1)):
+        
+        soot_values_Brear_Dfront_Upper = 1.6*8*100000*1.3
+        soot_values_Bright_Dleft_Upper = 1.9*8*100000*1.3
+        soot_values_Bleft_Dright_Upper = 1.6*8*100000*1.3
+        soot_values_Bfront_Drear_Upper = 1.9*8*100000*1.3
+        soot_values_C_all_Upper = 1.9*16*100000*1.3
+        soot_values_A_all_Upper = 4.5*16*100000*1.3
+        
+        soot_values_Brear_Dfront_Lower = 1.6*8*100000*1
+        soot_values_Bright_Dleft_Lower = 1.9*8*100000*1
+        soot_values_Bleft_Dright_Lower = 1.6*8*100000*1
+        soot_values_Bfront_Drear_Lower = 1.9*8*100000*1
+        soot_values_C_all_Lower = 1.9*16*100000*1
+        soot_values_A_all_Lower = 4.5*16*100000*1
+        
+    elif ((dev_ww_gain > -3) & (dev_ww_gain <= -1)):
+        
+        soot_values_Brear_Dfront_Upper = 1.6*8*100000*1
+        soot_values_Bright_Dleft_Upper = 1.9*8*100000*1
+        soot_values_Bleft_Dright_Upper = 1.6*8*100000*1
+        soot_values_Bfront_Drear_Upper = 1.9*8*100000*1
+        soot_values_C_all_Upper = 1.9*16*100000*1
+        soot_values_A_all_Upper = 4.5*16*100000*1
+        
+        soot_values_Brear_Dfront_Lower = 1.6*8*100000*0.93
+        soot_values_Bright_Dleft_Lower = 1.9*8*100000*0.93
+        soot_values_Bleft_Dright_Lower = 1.6*8*100000*0.93
+        soot_values_Bfront_Drear_Lower = 1.9*8*100000*0.93
+        soot_values_C_all_Lower = 1.9*16*100000*0.93
+        soot_values_A_all_Lower = 4.5*16*100000*0.93
+        
+    elif ((dev_ww_gain > -5) & (dev_ww_gain <= -3)):
+        
+        soot_values_Brear_Dfront_Upper = 1.6*8*100000*1
+        soot_values_Bright_Dleft_Upper = 1.9*8*100000*1
+        soot_values_Bleft_Dright_Upper = 1.6*8*100000*1
+        soot_values_Bfront_Drear_Upper = 1.9*8*100000*1
+        soot_values_C_all_Upper = 1.9*16*100000*1
+        soot_values_A_all_Upper = 4.5*16*100000*1
+        
+        soot_values_Brear_Dfront_Lower = 1.6*8*100000*0.86
+        soot_values_Bright_Dleft_Lower = 1.9*8*100000*0.86
+        soot_values_Bleft_Dright_Lower = 1.6*8*100000*0.86
+        soot_values_Bfront_Drear_Lower = 1.9*8*100000*0.86
+        soot_values_C_all_Lower = 1.9*16*100000*0.86
+        soot_values_A_all_Lower = 4.5*16*100000*0.86
+        
+    else:
+        
+        soot_values_Brear_Dfront_Upper = 1.6*8*100000*1
+        soot_values_Bright_Dleft_Upper = 1.9*8*100000*1
+        soot_values_Bleft_Dright_Upper = 1.6*8*100000*1
+        soot_values_Bfront_Drear_Upper = 1.9*8*100000*1
+        soot_values_C_all_Upper = 1.9*16*100000*1
+        soot_values_A_all_Upper = 4.5*16*100000*1
+        
+        soot_values_Brear_Dfront_Lower = 1.6*8*100000*0.8
+        soot_values_Bright_Dleft_Lower = 1.9*8*100000*0.8
+        soot_values_Bleft_Dright_Lower = 1.6*8*100000*0.8
+        soot_values_Bfront_Drear_Lower = 1.9*8*100000*0.8
+        soot_values_C_all_Lower = 1.9*16*100000*0.8
+        soot_values_A_all_Lower = 4.5*16*100000*0.8
+
+    soot_values = [[soot_values_Brear_Dfront_Upper,soot_values_Brear_Dfront_Lower],
+                   [soot_values_Bright_Dleft_Upper,soot_values_Bright_Dleft_Lower],
+                   [soot_values_Bleft_Dright_Upper,soot_values_Bleft_Dright_Lower],
+                   [soot_values_Bfront_Drear_Upper,soot_values_Bfront_Drear_Lower],
+                   [soot_values_C_all_Upper,soot_values_C_all_Lower],
+                   [soot_values_A_all_Upper,soot_values_A_all_Lower]]            
+        
+  
+    
+    # Perform any additional processing here
+    return DF, df_1, current_ww_gain,Load, soot_actual, designed_ww_gain, soot_values
+
+
+
+
+def generate_suggestions(current_ww_gain, soot_actual, soot_values, designed_ww_gain):
+    suggestions = []
+    for group_act, group_wind in zip(soot_actual,soot_values):
+        if (group_act > group_wind[0]):
+            suggestions.append(f'Group_{soot_actual.index(group_act) + 1} Soot-Blowers to be operated as indicated soot reaches maximum.              ')
+        elif ((current_ww_gain < designed_ww_gain) & (group_act >= group_wind[1]) & (group_act <= group_wind[0])):
+            custom_objects = {'SharedLayer': SharedLayer}
+
+            model = load_model("D:/OneDrive - Adani/checkpoint.U#5_all_load_scaled_shared_all_data_2min_absolute_scaled.h5", custom_objects = custom_objects)
+            df_3 = pd.read_csv('DF_input_1_1.csv')
+            df_3 = df_3.dropna()
+            df_3 = df_3.tail(5)
+            if (soot_actual.index(group_act) + 1) == 1:
+                df_4 = df_3.assign(**{c:0 for c in Group_1_blowers})
+            elif (soot_actual.index(group_act) + 1) == 2:
+                df_4 = df_3.assign(**{c:0 for c in Group_2_blowers})
+            elif (soot_actual.index(group_act) + 1) == 3:
+                df_4 = df_3.assign(**{c:0 for c in Group_3_blowers})
+            elif (soot_actual.index(group_act) + 1) == 4:
+                df_4 = df_3.assign(**{c:0 for c in Group_4_blowers})
+            elif (soot_actual.index(group_act) + 1) == 5:
+                df_4 = df_3.assign(**{c:0 for c in Group_5_blowers})
+            else:
+                df_4 = df_3.assign(**{c:0 for c in Group_6_blowers})
+            summary_df = pd.read_csv("DF_1_sd_mean_scaled_shared_all_2min_absolute_scaled.csv")
+            summary_df = summary_df.set_index('Unnamed: 0')
+            means = summary_df.loc[cols_to_scale, 'Mean']
+            stds = summary_df.loc[cols_to_scale, 'Standard Deviation']
+
+            DF_temp_copy_4 = copy.deepcopy(df_4)
+            scaled_DF_4 = DF_temp_copy_4.copy()
+            scaled_DF_4[cols_to_scale] = (df_4[cols_to_scale]-means)/stds   
+                
+            DF_temp_copy_3 = copy.deepcopy(df_3)
+            scaled_DF_3 = DF_temp_copy_3.copy()
+            scaled_DF_3[cols_to_scale] = (df_3[cols_to_scale]-means)/stds
+            
+            
+            
+            y_predict_after = pd.DataFrame(model.predict([scaled_DF_4[['5min_CF_A1', '5min_CF_A2', '5min_CF_A3', '5min_CF_A4']],scaled_DF_4[['5min_CF_A5','5min_CF_A6', '5min_CF_A7', '5min_CF_A8']],
+                     scaled_DF_4[['5min_CF_A9', '5min_CF_A10', '5min_CF_A11', '5min_CF_A12']], scaled_DF_4[['5min_CF_A13', '5min_CF_A14', '5min_CF_A15', '5min_CF_A16']],
+                     scaled_DF_4[['5min_CF_B1', '5min_CF_B2', '5min_CF_B3', '5min_CF_B4']],scaled_DF_4[['5min_CF_B5','5min_CF_B6', '5min_CF_B7', '5min_CF_B8']],
+                     scaled_DF_4[['5min_CF_B9', '5min_CF_B10', '5min_CF_B11', '5min_CF_B12']], scaled_DF_4[['5min_CF_B13', '5min_CF_B14', '5min_CF_B15', '5min_CF_B16']],
+                    scaled_DF_4[['5min_CF_C1', '5min_CF_C2', '5min_CF_C3', '5min_CF_C4']],scaled_DF_4[['5min_CF_C5','5min_CF_C6', '5min_CF_C7', '5min_CF_C8']],
+                     scaled_DF_4[['5min_CF_C9', '5min_CF_C10', '5min_CF_C11', '5min_CF_C12']], scaled_DF_4[['5min_CF_C13', '5min_CF_C14', '5min_CF_C15', '5min_CF_C16']],
+                    scaled_DF_4[['5min_CF_D1', '5min_CF_D2', '5min_CF_D3', '5min_CF_D4']],scaled_DF_4[['5min_CF_D5','5min_CF_D6', '5min_CF_D7', '5min_CF_D8']],
+                     scaled_DF_4[['5min_CF_D9', '5min_CF_D10', '5min_CF_D11', '5min_CF_D12']], scaled_DF_4[['5min_CF_D13', '5min_CF_D14', '5min_CF_D15', '5min_CF_D16']],
+                    scaled_DF_4[['ECON_OUTL_FEED_WATER_AVG_5min','FEEDWATER FLOW AT ECO INLET_5min',
+                             'LOAD/FUEL_5min', 'LOAD/AIR_5min', 'AIR FLOW_5min', 'COAL FLOW_5min',
+                             'Top_Mill_load_ratio_5min','Bottom_Mill_load_ratio_5min', 'Middle_Mill_load_ratio_5min',
+                             'Left_Side_Damper_5min', 'Right_Side_Damper_5min',
+                             'SSC_HYD_PRESSURE_Avg_1','LOAD_SSC_HYD_PRESSURE_Avg_1',
+                             'LOAD_CAT_A','LOAD_CAT_B','LOAD_CAT_C','LOAD_CAT_D','LOAD_CAT_E',
+                             'comb_001110','comb_001111','comb_010111','comb_011010','comb_011011','comb_011100','comb_011101','comb_011110',
+                             'comb_011111','comb_100111','comb_101100','comb_101110','comb_101111','comb_110011','comb_110110','comb_110111',
+                             'comb_111010','comb_111011','comb_111100','comb_111101','comb_111110','comb_111111']]]))
+            y_predic_before = pd.DataFrame(model.predict([scaled_DF_3[['5min_CF_A1', '5min_CF_A2', '5min_CF_A3', '5min_CF_A4']],scaled_DF_3[['5min_CF_A5','5min_CF_A6', '5min_CF_A7', '5min_CF_A8']],
+                     scaled_DF_3[['5min_CF_A9', '5min_CF_A10', '5min_CF_A11', '5min_CF_A12']], scaled_DF_3[['5min_CF_A13', '5min_CF_A14', '5min_CF_A15', '5min_CF_A16']],
+                     scaled_DF_3[['5min_CF_B1', '5min_CF_B2', '5min_CF_B3', '5min_CF_B4']],scaled_DF_3[['5min_CF_B5','5min_CF_B6', '5min_CF_B7', '5min_CF_B8']],
+                     scaled_DF_3[['5min_CF_B9', '5min_CF_B10', '5min_CF_B11', '5min_CF_B12']], scaled_DF_3[['5min_CF_B13', '5min_CF_B14', '5min_CF_B15', '5min_CF_B16']],
+                    scaled_DF_3[['5min_CF_C1', '5min_CF_C2', '5min_CF_C3', '5min_CF_C4']],scaled_DF_3[['5min_CF_C5','5min_CF_C6', '5min_CF_C7', '5min_CF_C8']],
+                     scaled_DF_3[['5min_CF_C9', '5min_CF_C10', '5min_CF_C11', '5min_CF_C12']], scaled_DF_3[['5min_CF_C13', '5min_CF_C14', '5min_CF_C15', '5min_CF_C16']],
+                    scaled_DF_3[['5min_CF_D1', '5min_CF_D2', '5min_CF_D3', '5min_CF_D4']],scaled_DF_3[['5min_CF_D5','5min_CF_D6', '5min_CF_D7', '5min_CF_D8']],
+                     scaled_DF_3[['5min_CF_D9', '5min_CF_D10', '5min_CF_D11', '5min_CF_D12']], scaled_DF_3[['5min_CF_D13', '5min_CF_D14', '5min_CF_D15', '5min_CF_D16']],
+                    scaled_DF_3[['ECON_OUTL_FEED_WATER_AVG_5min','FEEDWATER FLOW AT ECO INLET_5min',
+                             'LOAD/FUEL_5min', 'LOAD/AIR_5min', 'AIR FLOW_5min', 'COAL FLOW_5min',
+                             'Top_Mill_load_ratio_5min','Bottom_Mill_load_ratio_5min', 'Middle_Mill_load_ratio_5min',
+                             'Left_Side_Damper_5min', 'Right_Side_Damper_5min',
+                             'SSC_HYD_PRESSURE_Avg_1','LOAD_SSC_HYD_PRESSURE_Avg_1',
+                             'LOAD_CAT_A','LOAD_CAT_B','LOAD_CAT_C','LOAD_CAT_D','LOAD_CAT_E',
+                             'comb_001110','comb_001111','comb_010111','comb_011010','comb_011011','comb_011100','comb_011101','comb_011110',
+                             'comb_011111','comb_100111','comb_101100','comb_101110','comb_101111','comb_110011','comb_110110','comb_110111',
+                             'comb_111010','comb_111011','comb_111100','comb_111101','comb_111110','comb_111111']]]))
+            y_actual = pd.DataFrame(df_3['WW_Gain_5min_shift'])
+            y_actual.reset_index(inplace = True)
+                
+            predicted_ww_gain_before = ((y_predic_before*9.83)+78.46).mean()[0]
+            predicted_ww_gain_after = ((y_predict_after*9.83)+78.46).mean()[0]       
+            if ((predicted_ww_gain_after - predicted_ww_gain_before) > 0.5) :
+                    suggestions.append(f'Group_{soot_actual.index(group_act) + 1} Soot-Blowers to be operated as gain is less.              ')
+           #         suggestions.append(f'approximate gain is {predicted_ww_gain_after - predicted_ww_gain_before} degree after blowing group_{soot_actual.index(group_act) + 1} soot blower')
+            else:
+                      continue
+        else:
+            continue
+    return suggestions
+
+
+
+
+
+# Check if it's been more than 1 hour since the last update
+
+st.session_state.data = load_data()    
+DF, df_1, current_ww_gain,Load, soot_actual, designed_ww_gain, soot_values = st.session_state.data
+
+# Custom CSS for the title
+custom_title_css = """
+<style>
+.custom-title {
+    font-size: 40px;  /* Adjust the font size */
+    font-weight: bold;
+    color: #F0FFF0;  /* Adjust the color */
+    margin-top: 0px;  /* Adjust the top and bottom margins */
+    margin-bottom: 80px;
+    text-align: center;  /* Center the text */
+}
+</style>
+"""
+
+custom_background_css = """
+<style>
+.stApp {background-image:url("D:\OneDrive - Adani\logo acoe.png");
+        background-size: cover;
+}
+<style>
+"""
+
+st.markdown(custom_background_css,unsafe_allow_html=True )
+# Add custom CSS to the Streamlit app
+st.markdown(custom_title_css, unsafe_allow_html=True)
+
+# Use st.markdown with custom CSS class for the title
+st.markdown('<div class="custom-title">Unit #5 Soot Blowing Optimization Tool</div>', unsafe_allow_html=True)
+
+
+# Display Load vs Time and ww_gain vs Time graphs
+col1, col2 = st.columns(2)
+with col1:
+    fig_load = px.line(st.session_state.data[1], x='End Time', y='Load', title='Load vs Time')
+    fig_load.update_layout(
+        title={ 'text' : 'Trend of Unit Load', 'x' : 0.5, 'xanchor': 'center'},
+        yaxis_title='Value',
+        width=334.5,  # Adjust the width based on the number of groups
+        height=300,  # Adjust the height
+        font=dict(size=10)
+        )
+    st.plotly_chart(fig_load)
+with col2:
+    fig_ww_gain = px.line(st.session_state.data[1], x='End Time', y='WW_Gain', title='WW Gain vs Time')
+    fig_ww_gain.update_layout(
+        title={ 'text' : 'Trend of Water wall gain', 'x' : 0.5, 'xanchor': 'center'},
+        yaxis_title='Value',
+        width=334.5,  # Adjust the width based on the number of groups
+        height=300,  # Adjust the height
+        font=dict(size=10)
+        )
+    st.plotly_chart(fig_ww_gain)
+
+
+
+data = {
+        'Groups':['Group 1','Group 2', 'Group 3', 'Group 4', 'Group 5', 'Group 6'],
+        'Layers': ['B Rear + D Front','B Right + D Left','B Left + D Right',
+                   'B Front + D Rear', 'Complete C Layer', 'Complete A Layer']
+        }
+df = pd.DataFrame(data)
+
+
+
+
+st.sidebar.title("Group Details")
+st.sidebar.table(df.set_index('Groups'))
+
+data_2 = {
+    'group': ['Group 1','Group 2', 'Group 3', 'Group 4', 'Group 5', 'Group 6'],
+    'actual_value': st.session_state.data[4],
+    'lower_limit': [st.session_state.data[6][0][1], st.session_state.data[6][1][1], st.session_state.data[6][2][1], st.session_state.data[6][3][1], st.session_state.data[6][4][1], st.session_state.data[6][5][1]],
+    'upper_limit': [st.session_state.data[6][0][0], st.session_state.data[6][1][0], st.session_state.data[6][2][0], st.session_state.data[6][3][0], st.session_state.data[6][4][0], st.session_state.data[6][5][0]]
+}
+df_2 = pd.DataFrame(data_2)
+
+# Create a subplot figure
+fig = make_subplots(rows=1, cols=len(df_2), shared_yaxes=False)
+
+# Add a bar and a marker for each group
+for i, row in enumerate(df_2.itertuples()):
+    fig.add_trace(go.Bar(
+        x=[row.group],
+        y=[row.upper_limit - row.lower_limit],
+        width=[0.4,0.4,0.4],
+        base=row.lower_limit,
+        marker_color='lightblue',
+        showlegend=False
+    ), row=1, col=i+1)
+
+    fig.add_trace(go.Scatter(
+        x=[row.group],
+        y=[row.actual_value],
+        mode='markers',
+        marker=dict(color='red', size=10),
+        showlegend=False
+    ), row=1, col=i+1)
+
+# Update layout
+fig.update_layout(
+    title={ 'text' : 'Group Values with Limits', 'x' : 0.5, 'xanchor': 'center'},
+    yaxis_title='Value',
+    showlegend=False,
+    width=700,  # Adjust the width
+    height=450,  # Adjust the height
+    font=dict(size=10),  # Adjust the font size
+    margin=dict(l=20, r=20, t=50, b=20)  # Add margin around the plot
+)
+
+# Custom CSS to add border
+border_style = """
+    <style>
+    .stPlotlyChart > div {
+        border: 3px solid #C0C0C0;
+        border-radius: 3px;
+        
+    }
+    </style>
+"""
+
+image_path1 = "D:/OneDrive - Adani/logo acoe.png"
+image_path1 = "D:/OneDrive - Adani/logo acoe.png"
+# Inject custom CSS
+st.markdown(border_style, unsafe_allow_html=True)
+
+
+# Show plot in Streamlit
+st.plotly_chart(fig)
+
+
+
+
+
+
+
+suggestions = generate_suggestions(st.session_state.data[2], st.session_state.data[4], st.session_state.data[6], st.session_state.data[5])
+st.write("Suggestions:")
+
+suggestions_placeholder = st.empty()
+suggestions_text = "\n".join(suggestions)
+#for suggestion in suggestions:
+#    suggestions_placeholder.write("\n".join(suggestion))
+suggestions_placeholder.write(suggestions_text)
+with st.empty():
+    time.sleep(60*1)
+    suggestions_placeholder.empty()
+    st.rerun()
